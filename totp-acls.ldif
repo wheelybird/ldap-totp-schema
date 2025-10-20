@@ -1,0 +1,37 @@
+# TOTP/MFA Access Control Lists (ACLs)
+#
+# These ACLs ensure TOTP secrets are only readable by:
+# - The user themselves (for self-service management)
+# - Administrators
+# - The PAM authentication service
+#
+# Installation: Apply after the LDAP server is running:
+#   ldapmodify -Y EXTERNAL -H ldapi:/// -f totp-acls.ldif
+#
+# Or place in: /container/service/slapd/assets/config/bootstrap/ldif/custom/
+
+# Protect TOTP secrets and scratch codes
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+add: olcAccess
+# Rule 1: TOTP secrets are highly sensitive
+olcAccess: {0}to attrs=totpSecret,totpScratchCode
+  by self write
+  by group.exact="cn=admins,ou=groups,dc=example,dc=com" write
+  by dn.exact="cn=pam-totp,ou=services,dc=example,dc=com" read
+  by * none
+-
+add: olcAccess
+# Rule 2: TOTP status and dates are less sensitive (for UI display)
+olcAccess: {1}to attrs=totpStatus,totpEnrolledDate
+  by self read
+  by group.exact="cn=admins,ou=groups,dc=example,dc=com" write
+  by dn.exact="cn=ldap-user-manager,ou=services,dc=example,dc=com" write
+  by * none
+-
+add: olcAccess
+# Rule 3: MFA group policies are readable by all authenticated users
+olcAccess: {2}to attrs=mfaRequired,mfaGracePeriodDays
+  by group.exact="cn=admins,ou=groups,dc=example,dc=com" write
+  by users read
+  by * none
