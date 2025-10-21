@@ -4,10 +4,10 @@ OpenLDAP schema for storing TOTP (Time-based One-Time Password) secrets and mana
 
 ## Overview
 
-This schema extends your LDAP directory with attributes and object classes for implementing TOTP-based two-factor authentication. It provides a centralized, secure location for storing TOTP secrets and enforcing MFA policies across your infrastructure.
+This schema extends your LDAP directory with attributes and object classes for implementing TOTP-based two-factor authentication. It provides a centralised, secure location for storing TOTP secrets and enforcing MFA policies across your infrastructure.
 
 **Use cases:**
-- Centralized TOTP secret storage for authentication systems
+- Centralised TOTP secret storage for authentication systems
 - MFA policy enforcement at the group level
 - Grace period management for new user onboarding
 - Backup code storage for account recovery
@@ -21,8 +21,8 @@ This schema extends your LDAP directory with attributes and object classes for i
 |-----------|-----|------|-------------|
 | `totpSecret` | 1.3.6.1.4.1.64419.1.1.1 | Single-value | TOTP shared secret (Base32 encoded, e.g., `JBSWY3DPEHPK3PXP`) |
 | `totpScratchCode` | 1.3.6.1.4.1.64419.1.1.2 | Multi-value | Backup/recovery codes for emergency access (8-digit codes with `TOTP-SCRATCH:` prefix) |
-| `totpEnrolledDate` | 1.3.6.1.4.1.64419.1.1.3 | Single-value | Timestamp when user enrolled in MFA (GeneralizedTime format) |
-| `totpStatus` | 1.3.6.1.4.1.64419.1.1.4 | Single-value | Enrollment status: `none`, `pending`, `active`, `disabled`, `bypassed` |
+| `totpEnrolledDate` | 1.3.6.1.4.1.64419.1.1.3 | Single-value | Timestamp when user enrolled in MFA (GeneralisedTime format) |
+| `totpStatus` | 1.3.6.1.4.1.64419.1.1.4 | Single-value | Enrolment status: `none`, `pending`, `active`, `disabled`, `bypassed` |
 | `mfaRequired` | 1.3.6.1.4.1.64419.1.1.5 | Single-value | Boolean flag for group-level MFA requirement |
 | `mfaGracePeriodDays` | 1.3.6.1.4.1.64419.1.1.6 | Single-value | Number of days grace period before MFA enforcement |
 
@@ -62,10 +62,101 @@ ldapmodify -Y EXTERNAL -H ldapi:/// -f totp-acls.ldif
 ```
 
 **Access control summary:**
-- `totpSecret`: Readable by self, admins, and designated service accounts only
-- `totpScratchCode`: Same as `totpSecret`
-- `totpStatus`, `totpEnrolledDate`: Readable by self, admins, and authorized services
-- `mfaRequired`, `mfaGracePeriodDays`: Readable by all authenticated users
+- `totpSecret`: Writable by self and admins; readable by designated service accounts
+- `totpScratchCode`: Readable by self; writable by admins and service accounts (to remove used codes)
+- `totpStatus`, `totpEnrolledDate`: Readable by self, admins, and authorised services; writable by admins
+- `mfaRequired`, `mfaGracePeriodDays`: Readable by all authenticated users; writable by admins
+
+### 3. Create Service Account for PAM Authentication
+
+If you're using this schema with PAM modules (such as `libpam-ldapd` for password authentication and a custom TOTP PAM module for OTP verification), you'll need a service account that can:
+
+- Bind to LDAP and search for users (for password authentication)
+- Read `totpSecret` for OTP verification
+- Read `totpStatus` to check if MFA is enabled
+- Write to `totpScratchCode` to remove used backup codes
+
+**Create the service account:**
+
+```bash
+ldapadd -x -D "cn=admin,dc=example,dc=com" -w admin_password -f service-account.ldif
+```
+
+**Generate a secure password for the service account:**
+
+```bash
+# Generate a random password
+PASSWORD=$(openssl rand -base64 32)
+echo "Service account password: $PASSWORD"
+
+# Hash it for LDAP
+HASHED=$(slappasswd -s "$PASSWORD")
+echo "Hashed password: $HASHED"
+
+# Update the service-account.ldif file with the hashed password
+# or use ldapmodify to update it after creation
+```
+
+**Configure PAM to use this service account:**
+
+In `/etc/nslcd.conf`:
+```conf
+uri ldap://your-ldap-server.example.com
+base dc=example,dc=com
+binddn cn=nslcd,ou=services,dc=example,dc=com
+bindpw your-service-account-password
+
+# Enable TLS for secure connections
+ssl start_tls
+tls_reqcert demand
+tls_cacertfile /etc/ssl/certs/ca-certificates.crt
+```
+
+**Required ACLs for PAM integration:**
+
+Your `totp-acls.ldif` should include these rules (adjust to match your service account DN):
+
+```ldif
+# User passwords - allow service account to authenticate users
+olcAccess: {0}to attrs=userPassword
+  by self write
+  by anonymous auth
+  by group.exact="cn=admins,ou=groups,dc=example,dc=com" write
+  by dn.exact="cn=nslcd,ou=services,dc=example,dc=com" auth
+  by * none
+
+# TOTP secret - read-only for OTP verification
+olcAccess: {1}to attrs=totpSecret
+  by self write
+  by group.exact="cn=admins,ou=groups,dc=example,dc=com" write
+  by dn.exact="cn=nslcd,ou=services,dc=example,dc=com" read
+  by * none
+
+# TOTP scratch codes - write access to remove used codes
+olcAccess: {2}to attrs=totpScratchCode
+  by self read
+  by group.exact="cn=admins,ou=groups,dc=example,dc=com" write
+  by dn.exact="cn=nslcd,ou=services,dc=example,dc=com" write
+  by * none
+
+# TOTP status and enrolment - read access to check if MFA is active
+olcAccess: {3}to attrs=totpStatus,totpEnrolledDate
+  by self read
+  by group.exact="cn=admins,ou=groups,dc=example,dc=com" write
+  by dn.exact="cn=nslcd,ou=services,dc=example,dc=com" read
+  by * none
+
+# MFA policy attributes - check if MFA is required
+olcAccess: {4}to attrs=mfaRequired,mfaGracePeriodDays
+  by group.exact="cn=admins,ou=groups,dc=example,dc=com" write
+  by users read
+  by * none
+
+# General user attributes - service account needs to search for users
+olcAccess: {5}to dn.subtree="ou=people,dc=example,dc=com"
+  by dn.exact="cn=nslcd,ou=services,dc=example,dc=com" read
+  by * break
+```
 
 ## Usage Examples
 
@@ -101,7 +192,7 @@ totpEnrolledDate: 20251020120000Z
 EOF
 ```
 
-**Step 3: Generate QR code for user enrollment**
+**Step 3: Generate QR code for user enrolment**
 
 The user scans this with their authenticator app (Google Authenticator, Authy, etc.):
 
@@ -258,14 +349,14 @@ The grace period allows users time to set up MFA after account creation or MFA r
 ### Secret Storage
 
 - **Never** store TOTP secrets in plaintext in application code or logs
-- Use LDAP ACLs to restrict `totpSecret` access to authorized services only
+- Use LDAP ACLs to restrict `totpSecret` access to authorised services only
 - Secrets should only be transmitted over TLS/SSL connections
 - Consider using LDAP's built-in encryption (SSHA) for additional protection at rest
 
 ### Access Control
 
 The provided `totp-acls.ldif` implements these security rules:
-- Users can read their own `totpSecret` (for enrollment)
+- Users can read their own `totpSecret` (for enrolment)
 - Admins can read all TOTP attributes (for support)
 - Service accounts need explicit read access grants
 - Other users cannot read TOTP secrets
@@ -355,9 +446,9 @@ Ensure TOTP ACLs appear before more general "allow read" rules.
 - **RFC 4517** - LDAP: Syntaxes and Matching Rules
 - **RFC 2252** - LDAP Attribute Syntax Definitions
 
-## License
+## Licence
 
-MIT License - see [LICENSE](LICENSE) file for details.
+MIT Licence - see [LICENSE](LICENSE) file for details.
 
 ## Contributing
 
