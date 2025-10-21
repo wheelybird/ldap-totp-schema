@@ -356,30 +356,15 @@ The grace period allows users time to set up MFA after account creation or MFA r
 ### Access Control
 
 The provided `totp-acls.ldif` implements these security rules:
-- Users can read their own `totpSecret` (for enrolment)
-- Admins can read all TOTP attributes (for support)
-- Service accounts need explicit read access grants
-- Other users cannot read TOTP secrets
+- Users can write their own `totpSecret` (for self-enrolment) and read their own `totpScratchCode` (to know remaining backup codes)
+- Users **cannot** write their own `totpScratchCode` (prevents MFA bypass)
+- Admins can read and write all TOTP attributes
+- Service accounts need explicit permissions (see Installation section 3 for PAM integration example)
+- Other users cannot read TOTP secrets or scratch codes
 
-### Service Account Setup
+### Scratch Code Security
 
-Create dedicated service accounts for authentication systems:
-
-```bash
-ldapadd -x -D "cn=admin,dc=example,dc=com" -w admin_password <<EOF
-dn: cn=totp-auth-service,ou=services,dc=example,dc=com
-objectClass: simpleSecurityObject
-objectClass: organizationalRole
-cn: totp-auth-service
-userPassword: {SSHA}use_strong_password_here
-description: TOTP authentication service account
-EOF
-```
-
-Grant read access in `totp-acls.ldif`:
-```
-by dn.exact="cn=totp-auth-service,ou=services,dc=example,dc=com" read
-```
+**Important security consideration:** Users are given read-only access to their scratch codes. This allows them to view how many backup codes remain, but prevents them from adding new codes to bypass MFA. Only administrators can add, modify, or manually remove scratch codes. The authentication service account can remove codes automatically when they are used during login.
 
 ## OID Registry
 
