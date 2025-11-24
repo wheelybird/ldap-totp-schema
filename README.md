@@ -13,7 +13,72 @@ This schema extends your LDAP directory with attributes and object classes for i
 - Backup code storage for account recovery
 - Integration with PAM, web applications, VPN servers, or custom authentication systems
 
-## Schema Contents
+## Quick setup
+
+The easiest way to get started is to use the setup script, which downloads the latest release and customises the LDIF files for your directory:
+
+```bash
+# Download and run the setup script
+curl -sL https://raw.githubusercontent.com/wheelybird/ldap-totp-schema/main/setup.sh | bash
+```
+
+Or clone the repository and run it locally:
+
+```bash
+git clone https://github.com/wheelybird/ldap-totp-schema.git
+cd ldap-totp-schema
+./setup.sh
+```
+
+The script will:
+1. Prompt you for your base DN (e.g., `dc=example,dc=com`)
+2. Download the latest release from GitHub
+3. Create customised LDIF files in `./ldap-totp-schema-configured/`
+
+### Using with osixia/openldap Docker container
+
+The [osixia/openldap](https://github.com/osixia/docker-openldap) container supports adding custom schemas and LDIF files at startup. After running the setup script, mount the generated files as volumes:
+
+```bash
+docker run \
+  --detach \
+  --name openldap \
+  --hostname openldap \
+  -p 389:389 \
+  -e LDAP_ORGANISATION="Example Company" \
+  -e LDAP_DOMAIN="example.com" \
+  -e LDAP_ADMIN_PASSWORD="admin_password" \
+  -e LDAP_TLS_VERIFY_CLIENT="never" \
+  -e "LDAP_RFC2307BIS_SCHEMA=true" \
+  --volume /opt/docker_data/openldap/var_lib_ldap:/var/lib/ldap \
+  --volume /opt/docker_data/openldap/etc_ldap_slapd.d:/etc/ldap/slapd.d \
+  --volume ./ldap-totp-schema-configured/totp-schema.ldif:/container/service/slapd/assets/config/bootstrap/schema/custom/totp-schema.ldif:ro \
+  --volume ./ldap-totp-schema-configured/totp-acls.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/totp-acls.ldif:ro \
+  osixia/openldap:latest \
+  --copy-service
+```
+
+**Notes:**
+- The schema file goes in `.../schema/custom/` (loaded before data)
+- The ACL file goes in `.../ldif/custom/` (applied after schema)
+- Use `:ro` (read-only) to prevent the container from modifying your source files
+- Use the `--copy-service` argument to allow **osixia/openldap** to install the LDIF files properly
+- Replace `/opt/docker_data/openldap/...` with your preferred data directory
+- Set `LDAP_DOMAIN` to match your base DN (e.g., `example.com` for `dc=example,dc=com`)
+
+If you're adding the schema to an existing container, you can apply it manually:
+
+```bash
+# Copy files into the container
+docker cp ./ldap-totp-schema-configured/totp-schema.ldif openldap:/tmp/
+docker cp ./ldap-totp-schema-configured/totp-acls.ldif openldap:/tmp/
+
+# Apply schema and ACLs
+docker exec openldap ldapadd -Y EXTERNAL -H ldapi:/// -f /tmp/totp-schema.ldif
+docker exec openldap ldapmodify -Y EXTERNAL -H ldapi:/// -f /tmp/totp-acls.ldif
+```
+
+## Schema contents
 
 ### Attributes
 
@@ -26,7 +91,7 @@ This schema extends your LDAP directory with attributes and object classes for i
 | `mfaRequired` | 1.3.6.1.4.1.64419.1.1.5 | Single-value | Boolean flag for group-level MFA requirement |
 | `mfaGracePeriodDays` | 1.3.6.1.4.1.64419.1.1.6 | Single-value | Number of days grace period before MFA enforcement |
 
-### Object Classes
+### Object classes
 
 | Object Class | OID | Type | Attributes |
 |--------------|-----|------|------------|
@@ -35,29 +100,9 @@ This schema extends your LDAP directory with attributes and object classes for i
 
 **Note:** Both object classes are auxiliary, meaning they extend existing user and group entries without replacing the structural object class.
 
-## Installation
+## Detailed installation steps
 
-### Quick Start
-
-```bash
-# 1. Clone repository
-git clone https://github.com/wheelybird/ldap-totp-schema.git
-cd ldap-totp-schema
-
-# 2. Add schema to OpenLDAP
-sudo ldapadd -Y EXTERNAL -H ldapi:/// -f totp-schema.ldif
-
-# 3. Configure access controls (recommended)
-# Edit totp-acls.ldif to match your directory structure
-sudo ldapmodify -Y EXTERNAL -H ldapi:/// -f totp-acls.ldif
-
-# 4. Verify installation
-ldapsearch -Y EXTERNAL -H ldapi:/// -b "cn=schema,cn=config" "(cn=*totp*)"
-```
-
-### Detailed Installation Steps
-
-#### Prerequisites
+### Prerequisites
 
 - OpenLDAP 2.4+ with `cn=config` (OLC) configuration
 - Root or LDAP admin access to add schemas
@@ -69,7 +114,7 @@ slapd -V
 # Should show: @(#) $OpenLDAP: slapd 2.4.x or higher
 ```
 
-#### 1. Download Schema
+### 1. Download schema
 
 **Option A: Clone from Git (recommended)**
 ```bash
@@ -84,7 +129,7 @@ tar xzf v1.0.0.tar.gz
 cd ldap-totp-schema-1.0.0
 ```
 
-#### 2. Add Schema to OpenLDAP
+### 2. Add Schema to OpenLDAP
 
 ```bash
 sudo ldapadd -Y EXTERNAL -H ldapi:/// -f totp-schema.ldif
@@ -106,7 +151,7 @@ ldapsearch -Y EXTERNAL -H ldapi:/// -b "cn=schema,cn=config" "(cn=*totp*)"
 - If you get "Already exists", the schema is already installed
 - If you get "No such object", verify your LDAP server is using `cn=config`
 
-### 2. Configure Access Controls (Optional but Recommended)
+### 3. Configure access controls (optional but recommended)
 
 The `totp-acls.ldif` file provides secure access controls for TOTP secrets. Edit the file to match your directory structure:
 
@@ -124,7 +169,7 @@ ldapmodify -Y EXTERNAL -H ldapi:/// -f totp-acls.ldif
 - `totpStatus`, `totpEnrolledDate`: Readable by self, admins, and authorised services; writable by admins
 - `mfaRequired`, `mfaGracePeriodDays`: Readable by all authenticated users; writable by admins
 
-### 3. Create Service Account for PAM Authentication
+### 4. Create a service account for PAM authentication
 
 If you're using this schema with PAM modules such as [pam-ldap-totp-auth](https://github.com/wheelybird/pam-ldap-totp-auth) you'll might want to use a service account that can:
 
