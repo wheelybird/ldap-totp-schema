@@ -5,7 +5,10 @@
 # Downloads the latest release of ldap-totp-schema from GitHub and modifies
 # the LDIF files to use your base DN.
 #
-# Usage: ./setup.sh
+# Usage:
+#   ./setup.sh                          # Interactive prompt for base DN
+#   ./setup.sh dc=example,dc=com        # Provide base DN as argument
+#   curl ... | bash -s -- dc=example,dc=com  # Pipe with argument
 #
 
 set -e
@@ -22,19 +25,19 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No colour
 
 print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    echo -e "${BLUE}[INFO]${NC} $1" >&2
 }
 
 print_success() {
-    echo -e "${GREEN}[OK]${NC} $1"
+    echo -e "${GREEN}[OK]${NC} $1" >&2
 }
 
 print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
+    echo -e "${YELLOW}[WARNING]${NC} $1" >&2
 }
 
 print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[ERROR]${NC} $1" >&2
 }
 
 # Check for required tools
@@ -68,6 +71,33 @@ validate_base_dn() {
 
 # Prompt for base DN
 get_base_dn() {
+    # If base DN was provided as argument, use it
+    if [ -n "$1" ]; then
+        BASE_DN="$1"
+        if validate_base_dn "$BASE_DN"; then
+            print_info "Using base DN: $BASE_DN"
+            return 0
+        else
+            print_error "Invalid base DN format: $BASE_DN"
+            print_error "Please use format like 'dc=example,dc=com'"
+            exit 1
+        fi
+    fi
+
+    # Check if we can read from terminal
+    if [ ! -t 0 ]; then
+        # stdin is not a terminal (e.g., piped from curl)
+        # Try to read from /dev/tty
+        if [ -e /dev/tty ]; then
+            exec < /dev/tty
+        else
+            print_error "No terminal available for input."
+            print_error "Please provide base DN as argument:"
+            echo "  curl -sL https://raw.githubusercontent.com/wheelybird/ldap-totp-schema/main/setup.sh | bash -s -- dc=example,dc=com"
+            exit 1
+        fi
+    fi
+
     echo ""
     echo "Enter your LDAP base DN."
     echo "Examples:"
@@ -191,14 +221,34 @@ show_summary() {
     echo ""
 }
 
+# Show usage
+show_usage() {
+    echo "Usage: $0 [BASE_DN]"
+    echo ""
+    echo "Arguments:"
+    echo "  BASE_DN    Your LDAP base DN (e.g., dc=example,dc=com)"
+    echo ""
+    echo "Examples:"
+    echo "  $0                           # Interactive prompt"
+    echo "  $0 dc=luminary,dc=id         # Non-interactive"
+    echo "  curl -sL URL | bash -s -- dc=example,dc=com"
+    echo ""
+}
+
 # Main
 main() {
+    # Handle --help
+    if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+        show_usage
+        exit 0
+    fi
+
     echo ""
     echo "LDAP TOTP Schema Setup"
     echo "======================"
 
     check_dependencies
-    get_base_dn
+    get_base_dn "$1"
 
     # Determine output directory
     OUTPUT_DIR="./ldap-totp-schema-configured"

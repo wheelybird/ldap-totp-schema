@@ -18,8 +18,8 @@ This schema extends your LDAP directory with attributes and object classes for i
 The easiest way to get started is to use the setup script, which downloads the latest release and customises the LDIF files for your directory:
 
 ```bash
-# Download and run the setup script
-curl -sL https://raw.githubusercontent.com/wheelybird/ldap-totp-schema/main/setup.sh | bash
+# Download and run - provide your base DN as an argument
+curl -sL https://raw.githubusercontent.com/wheelybird/ldap-totp-schema/main/setup.sh | bash -s -- dc=example,dc=com
 ```
 
 Or clone the repository and run it locally:
@@ -27,11 +27,16 @@ Or clone the repository and run it locally:
 ```bash
 git clone https://github.com/wheelybird/ldap-totp-schema.git
 cd ldap-totp-schema
+
+# With argument (non-interactive)
+./setup.sh dc=example,dc=com
+
+# Or interactively (will prompt for base DN)
 ./setup.sh
 ```
 
 The script will:
-1. Prompt you for your base DN (e.g., `dc=example,dc=com`)
+1. Use the provided base DN (or prompt you for one if not provided)
 2. Download the latest release from GitHub
 3. Create customised LDIF files in `./ldap-totp-schema-configured/`
 
