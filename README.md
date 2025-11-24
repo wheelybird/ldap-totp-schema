@@ -126,7 +126,7 @@ ldapmodify -Y EXTERNAL -H ldapi:/// -f totp-acls.ldif
 
 ### 3. Create Service Account for PAM Authentication
 
-If you're using this schema with PAM modules (such as `libpam-ldapd` for password authentication and a custom TOTP PAM module for OTP verification), you'll need a service account that can:
+If you're using this schema with PAM modules such as [pam-ldap-totp-auth](https://github.com/wheelybird/pam-ldap-totp-auth) you'll might want to use a service account that can:
 
 - Bind to LDAP and search for users (for password authentication)
 - Read `totpSecret` for OTP verification
@@ -154,19 +154,17 @@ echo "Hashed password: $HASHED"
 # or use ldapmodify to update it after creation
 ```
 
-**Configure PAM to use this service account:**
+**Configure pam-ldap-totp-auth to use this service account:**
 
-In `/etc/nslcd.conf`:
-```conf
-uri ldap://your-ldap-server.example.com
-base dc=example,dc=com
-binddn cn=nslcd,ou=services,dc=example,dc=com
-bindpw your-service-account-password
-
-# Enable TLS for secure connections
-ssl start_tls
-tls_reqcert demand
-tls_cacertfile /etc/ssl/certs/ca-certificates.crt
+```
+# /etc/security/pam_ldap_totp_auth.conf
+totp_enabled true
+totp_mode challenge
+ldap_uri ldap://ldap.example.com
+ldap_base dc=example,dc=com
+tls_mode starttls
+tls_verify_cert true
+tls_ca_cert_file /etc/ssl/certs/ca-certificates.crt
 ```
 
 **Required ACLs for PAM integration:**
