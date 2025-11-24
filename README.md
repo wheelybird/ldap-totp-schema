@@ -38,7 +38,19 @@ cd ldap-totp-schema
 The script will:
 1. Use the provided base DN (or prompt you for one if not provided)
 2. Download the latest release from GitHub
-3. Create customised LDIF files in `./ldap-totp-schema-configured/`
+3. Generate a random password for the service account
+4. Create customised LDIF files in `./ldap-totp-schema-configured/`
+
+**Generated files:**
+- `totp-schema.ldif` - TOTP attributes and object classes
+- `totp-acls.ldif` - Access control rules (customised for your base DN)
+- `service-account.ldif` - PAM service account (customised for your base DN)
+- `service-account-password.txt` - Service account password (mode 600)
+
+**Note:** The service account password will be hashed using `slappasswd` if available. If `slappasswd` is not installed, the password will be stored in plaintext in the LDIF file. You can hash it later with:
+```bash
+slappasswd -s "$(grep 'Password:' ./ldap-totp-schema-configured/service-account-password.txt | cut -d' ' -f2)"
+```
 
 ### Using with osixia/openldap Docker container
 
@@ -58,18 +70,21 @@ docker run \
   --volume /opt/docker_data/openldap/var_lib_ldap:/var/lib/ldap \
   --volume /opt/docker_data/openldap/etc_ldap_slapd.d:/etc/ldap/slapd.d \
   --volume ./ldap-totp-schema-configured/totp-schema.ldif:/container/service/slapd/assets/config/bootstrap/schema/custom/totp-schema.ldif:ro \
-  --volume ./ldap-totp-schema-configured/totp-acls.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/totp-acls.ldif:ro \
+  --volume ./ldap-totp-schema-configured/totp-acls.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-totp-acls.ldif:ro \
+  --volume ./ldap-totp-schema-configured/service-account.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/60-service-account.ldif:ro \
   osixia/openldap:latest \
   --copy-service
 ```
 
 **Notes:**
 - The schema file goes in `.../schema/custom/` (loaded before data)
-- The ACL file goes in `.../ldif/custom/` (applied after schema)
+- The LDIF files go in `.../ldif/custom/` (applied after schema)
+- Numeric prefixes (50-, 60-) ensure files are processed in the correct order (ACLs before service account)
 - Use `:ro` (read-only) to prevent the container from modifying your source files
 - Use the `--copy-service` argument to allow **osixia/openldap** to install the LDIF files properly
 - Replace `/opt/docker_data/openldap/...` with your preferred data directory
 - Set `LDAP_DOMAIN` to match your base DN (e.g., `example.com` for `dc=example,dc=com`)
+- The service account LDIF creates `ou=services` automatically if it doesn't exist
 
 If you're adding the schema to an existing container, you can apply it manually:
 
@@ -77,11 +92,17 @@ If you're adding the schema to an existing container, you can apply it manually:
 # Copy files into the container
 docker cp ./ldap-totp-schema-configured/totp-schema.ldif openldap:/tmp/
 docker cp ./ldap-totp-schema-configured/totp-acls.ldif openldap:/tmp/
+docker cp ./ldap-totp-schema-configured/service-account.ldif openldap:/tmp/
 
 # Apply schema and ACLs
 docker exec openldap ldapadd -Y EXTERNAL -H ldapi:/// -f /tmp/totp-schema.ldif
 docker exec openldap ldapmodify -Y EXTERNAL -H ldapi:/// -f /tmp/totp-acls.ldif
+
+# Create the services OU and service account (adjust admin DN as needed)
+docker exec openldap ldapadd -x -D "cn=admin,dc=example,dc=com" -w admin_password -f /tmp/service-account.ldif
 ```
+
+**Note:** The service account LDIF includes the `ou=services` organisational unit. If this OU already exists in your directory, you may see an "Already exists" error for that entry - this is safe to ignore as the service account will still be created.
 
 ## Schema contents
 
