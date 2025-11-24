@@ -3,10 +3,6 @@
 # This schema adds attributes and object classes for storing TOTP secrets
 # and managing MFA enforcement policies in LDAP.
 #
-# Installation: Place this file in the osixia/openldap container at:
-#   /container/service/slapd/assets/config/bootstrap/ldif/custom/totp-schema.ldif
-#
-# OID Prefix: 1.3.6.1.4.1.64419 (Private Enterprise Number assigned by IANA)
 # Structure:
 #   1.3.6.1.4.1.64419.1.1.x = Attribute Types
 #   1.3.6.1.4.1.64419.1.2.x = Object Classes
