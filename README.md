@@ -20,7 +20,7 @@ This schema extends your LDAP directory with attributes and object classes for i
 | Attribute | OID | Type | Description |
 |-----------|-----|------|-------------|
 | `totpSecret` | 1.3.6.1.4.1.64419.1.1.1 | Single-value | TOTP shared secret (Base32 encoded, e.g., `JBSWY3DPEHPK3PXP`) |
-| `totpScratchCode` | 1.3.6.1.4.1.64419.1.1.2 | Multi-value | Backup/recovery codes for emergency access (8-digit codes with `TOTP-SCRATCH:` prefix) |
+| `totpScratchCode` | 1.3.6.1.4.1.64419.1.1.2 | Multi-value | Backup/recovery codes for emergency access (plain 8-digit codes, e.g., `12345678`) |
 | `totpEnrolledDate` | 1.3.6.1.4.1.64419.1.1.3 | Single-value | Timestamp when user enrolled in MFA (GeneralisedTime format) |
 | `totpStatus` | 1.3.6.1.4.1.64419.1.1.4 | Single-value | Enrolment status: `none`, `pending`, `active`, `disabled`, `bypassed` |
 | `mfaRequired` | 1.3.6.1.4.1.64419.1.1.5 | Single-value | Boolean flag for group-level MFA requirement |
@@ -37,10 +37,62 @@ This schema extends your LDAP directory with attributes and object classes for i
 
 ## Installation
 
-### 1. Add Schema to OpenLDAP
+### Quick Start
 
 ```bash
-ldapadd -Y EXTERNAL -H ldapi:/// -f totp-schema.ldif
+# 1. Clone repository
+git clone https://github.com/wheelybird/ldap-totp-schema.git
+cd ldap-totp-schema
+
+# 2. Add schema to OpenLDAP
+sudo ldapadd -Y EXTERNAL -H ldapi:/// -f totp-schema.ldif
+
+# 3. Configure access controls (recommended)
+# Edit totp-acls.ldif to match your directory structure
+sudo ldapmodify -Y EXTERNAL -H ldapi:/// -f totp-acls.ldif
+
+# 4. Verify installation
+ldapsearch -Y EXTERNAL -H ldapi:/// -b "cn=schema,cn=config" "(cn=*totp*)"
+```
+
+### Detailed Installation Steps
+
+#### Prerequisites
+
+- OpenLDAP 2.4+ with `cn=config` (OLC) configuration
+- Root or LDAP admin access to add schemas
+- LDAP server running locally or accessible via LDAPI
+
+**Verify OpenLDAP version:**
+```bash
+slapd -V
+# Should show: @(#) $OpenLDAP: slapd 2.4.x or higher
+```
+
+#### 1. Download Schema
+
+**Option A: Clone from Git (recommended)**
+```bash
+git clone https://github.com/wheelybird/ldap-totp-schema.git
+cd ldap-totp-schema
+```
+
+**Option B: Download Release**
+```bash
+wget https://github.com/wheelybird/ldap-totp-schema/archive/v1.0.0.tar.gz
+tar xzf v1.0.0.tar.gz
+cd ldap-totp-schema-1.0.0
+```
+
+#### 2. Add Schema to OpenLDAP
+
+```bash
+sudo ldapadd -Y EXTERNAL -H ldapi:/// -f totp-schema.ldif
+```
+
+**Expected output:**
+```
+adding new entry "cn=totp,cn=schema,cn=config"
 ```
 
 **Verify installation:**
@@ -48,6 +100,11 @@ ldapadd -Y EXTERNAL -H ldapi:/// -f totp-schema.ldif
 ldapsearch -Y EXTERNAL -H ldapi:/// -b "cn=schema,cn=config" "(cn=*totp*)"
 # Should return: cn=totp,cn=schema,cn=config
 ```
+
+**Troubleshooting:**
+- If you get "Invalid credentials", ensure you're running as root or with sudo
+- If you get "Already exists", the schema is already installed
+- If you get "No such object", verify your LDAP server is using `cn=config`
 
 ### 2. Configure Access Controls (Optional but Recommended)
 
@@ -213,7 +270,7 @@ Generate and store 10 backup codes for emergency access:
 ```bash
 # Generate backup codes (8 digits each)
 for i in {1..10}; do
-  printf "TOTP-SCRATCH:%08d\n" $((RANDOM * RANDOM % 100000000))
+  printf "%08d\n" $((RANDOM * RANDOM % 100000000))
 done
 
 # Add to user entry
@@ -221,16 +278,16 @@ ldapmodify -x -D "cn=admin,dc=example,dc=com" -w admin_password <<EOF
 dn: uid=jdoe,ou=people,dc=example,dc=com
 changetype: modify
 add: totpScratchCode
-totpScratchCode: TOTP-SCRATCH:12345678
-totpScratchCode: TOTP-SCRATCH:87654321
-totpScratchCode: TOTP-SCRATCH:11223344
-totpScratchCode: TOTP-SCRATCH:44332211
-totpScratchCode: TOTP-SCRATCH:56789012
-totpScratchCode: TOTP-SCRATCH:21098765
-totpScratchCode: TOTP-SCRATCH:98765432
-totpScratchCode: TOTP-SCRATCH:23456789
-totpScratchCode: TOTP-SCRATCH:34567890
-totpScratchCode: TOTP-SCRATCH:45678901
+totpScratchCode: 12345678
+totpScratchCode: 87654321
+totpScratchCode: 11223344
+totpScratchCode: 44332211
+totpScratchCode: 56789012
+totpScratchCode: 21098765
+totpScratchCode: 98765432
+totpScratchCode: 23456789
+totpScratchCode: 34567890
+totpScratchCode: 45678901
 EOF
 ```
 
@@ -422,6 +479,25 @@ Ensure TOTP ACLs appear before more general "allow read" rules.
 2. Add new attributes with different OIDs if changes are needed
 3. Migrate data to new attributes
 4. (Last resort) Rebuild LDAP directory from scratch
+
+## Related Projects
+
+This schema is part of a complete LDAP-backed MFA solution:
+
+- **[pam-ldap-totp-auth](https://github.com/wheelybird/pam-ldap-totp-auth)** - PAM module for LDAP password and TOTP authentication
+  - Use with SSH, sudo, login, OpenVPN, and other PAM-enabled services
+  - Reads TOTP secrets from this schema
+  - Supports grace periods and backup codes
+
+- **[Luminary](https://github.com/wheelybird/luminary)** - Web UI for LDAP user management with MFA enrollment
+  - Self-service TOTP enrollment with QR codes
+  - Admin user/group management
+  - MFA status dashboard
+  - Backup code generation
+
+- **[openvpn-server-ldap-otp](https://github.com/wheelybird/openvpn-server-ldap-otp)** - OpenVPN server with LDAP and TOTP support
+  - Docker container with pre-configured PAM stack
+  - Ready-to-use OpenVPN with MFA
 
 ## Standards & References
 
