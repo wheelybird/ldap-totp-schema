@@ -125,6 +125,56 @@ get_base_dn() {
     print_info "Using base DN: $BASE_DN"
 }
 
+# Generate a random password
+generate_password() {
+    local length="${1:-32}"
+    local password=""
+
+    # Try native bash with /dev/urandom first
+    if [ -r /dev/urandom ]; then
+        password=$(tr -dc 'A-Za-z0-9' < /dev/urandom 2>/dev/null | head -c "$length")
+        if [ ${#password} -eq "$length" ]; then
+            echo "$password"
+            return 0
+        fi
+    fi
+
+    # Fall back to openssl if available
+    if command -v openssl &> /dev/null; then
+        password=$(openssl rand -base64 48 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c "$length")
+        if [ -n "$password" ]; then
+            echo "$password"
+            return 0
+        fi
+    fi
+
+    # Fall back to $RANDOM (less secure but works everywhere)
+    password=""
+    local chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+    for _ in $(seq 1 "$length"); do
+        password="${password}${chars:RANDOM%${#chars}:1}"
+    done
+    echo "$password"
+}
+
+# Hash password for LDAP if slappasswd is available
+hash_password() {
+    local password="$1"
+
+    # Try slappasswd (OpenLDAP)
+    if command -v slappasswd &> /dev/null; then
+        local hashed
+        hashed=$(slappasswd -s "$password" 2>/dev/null)
+        if [ -n "$hashed" ]; then
+            echo "$hashed"
+            return 0
+        fi
+    fi
+
+    # No hashing available - return empty to indicate failure
+    return 1
+}
+
 # Download latest release or fallback to main branch
 download_schema() {
     local temp_dir
@@ -170,18 +220,58 @@ modify_files() {
     # Create output directory if it doesn't exist
     mkdir -p "$output_dir"
 
-    # Files to process
-    local files=("totp-acls.ldif" "service-account.ldif")
+    # Process totp-acls.ldif
+    if [ -f "${source_dir}/totp-acls.ldif" ]; then
+        sed "s/${DEFAULT_BASE_DN}/${BASE_DN}/g" "${source_dir}/totp-acls.ldif" > "${output_dir}/totp-acls.ldif"
+        print_success "Created ${output_dir}/totp-acls.ldif"
+    else
+        print_warning "File not found: totp-acls.ldif"
+    fi
 
-    for file in "${files[@]}"; do
-        if [ -f "${source_dir}/${file}" ]; then
-            # Replace default base DN with user's base DN
-            sed "s/${DEFAULT_BASE_DN}/${BASE_DN}/g" "${source_dir}/${file}" > "${output_dir}/${file}"
-            print_success "Created ${output_dir}/${file}"
+    # Process service-account.ldif with generated password
+    if [ -f "${source_dir}/service-account.ldif" ]; then
+        print_info "Generating service account password..."
+
+        # Generate password
+        SERVICE_PASSWORD=$(generate_password 32)
+
+        # Try to hash it
+        local password_value
+        if HASHED_PASSWORD=$(hash_password "$SERVICE_PASSWORD"); then
+            password_value="$HASHED_PASSWORD"
+            print_success "Password hashed with slappasswd"
         else
-            print_warning "File not found: ${file}"
+            # Can't hash - use plaintext with warning
+            password_value="$SERVICE_PASSWORD"
+            print_warning "slappasswd not available - password stored in plaintext"
+            print_warning "Consider hashing it later with: slappasswd -s <password>"
         fi
-    done
+
+        # Replace base DN and password placeholder
+        sed -e "s/${DEFAULT_BASE_DN}/${BASE_DN}/g" \
+            -e "s/{SSHA}YourHashedPasswordHere/${password_value}/g" \
+            "${source_dir}/service-account.ldif" > "${output_dir}/service-account.ldif"
+        print_success "Created ${output_dir}/service-account.ldif"
+
+        # Save password to file with restricted permissions
+        local password_file="${output_dir}/service-account-password.txt"
+        (
+            umask 077
+            cat > "$password_file" << EOF
+# Service account password for LDAP TOTP authentication
+# Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+#
+# Account DN: cn=nslcd,ou=services,${BASE_DN}
+#
+# IMPORTANT: Keep this file secure and delete after configuring your services.
+
+Password: ${SERVICE_PASSWORD}
+EOF
+        )
+        print_success "Created ${password_file} (mode 600)"
+    else
+        print_warning "File not found: service-account.ldif"
+    fi
 
     # Copy schema file (doesn't need modification)
     if [ -f "${source_dir}/totp-schema.ldif" ]; then
@@ -201,9 +291,15 @@ show_summary() {
     echo ""
     echo "Files created in: ${output_dir}"
     echo ""
-    echo "  totp-schema.ldif      - TOTP attributes and object classes"
-    echo "  totp-acls.ldif        - Access control rules (customised for ${BASE_DN})"
-    echo "  service-account.ldif  - PAM service account (customised for ${BASE_DN})"
+    echo "  totp-schema.ldif              - TOTP attributes and object classes"
+    echo "  totp-acls.ldif                - Access control rules (customised for ${BASE_DN})"
+    echo "  service-account.ldif          - PAM service account (customised for ${BASE_DN})"
+    echo "  service-account-password.txt  - Service account password (KEEP SECURE)"
+    echo ""
+    echo -e "${YELLOW}IMPORTANT:${NC} The service account password has been saved to:"
+    echo "  ${output_dir}/service-account-password.txt"
+    echo ""
+    echo "  Store this password securely and delete the file after configuring your services."
     echo ""
     echo "Next steps:"
     echo ""
@@ -214,7 +310,10 @@ show_summary() {
     echo "2. Add schema to OpenLDAP:"
     echo "   sudo ldapadd -Y EXTERNAL -H ldapi:/// -f ${output_dir}/totp-schema.ldif"
     echo ""
-    echo "3. Apply access controls:"
+    echo "3. Create the services OU and service account:"
+    echo "   ldapadd -x -D \"cn=admin,${BASE_DN}\" -W -f ${output_dir}/service-account.ldif"
+    echo ""
+    echo "4. Apply access controls:"
     echo "   sudo ldapmodify -Y EXTERNAL -H ldapi:/// -f ${output_dir}/totp-acls.ldif"
     echo ""
     echo "For osixia/openldap Docker container, see the README for volume mount instructions."
